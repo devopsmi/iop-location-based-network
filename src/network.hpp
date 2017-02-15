@@ -2,6 +2,7 @@
 #define __LOCNET_ASIO_NETWORK_H__
 
 #include <functional>
+#include <future>
 #include <memory>
 #include <thread>
 
@@ -42,28 +43,45 @@ public:
 
 
 
-// Interface of a network session, i.e. a client connection that allows
-// sending and receiving protobuf messages (either request or response).
+// Interface of a network connection that allows sending and receiving protobuf messages
+// (either request or response).
 // TODO this would be more independent if would send/receive byte arrays,
 //      but receiving a message we have to be aware of the message header
 //      to know how many bytes to read, it cannot be determined in advance.
-class IProtoBufNetworkSession
+class INetworkConnection
 {
 public:
- 
-    virtual ~IProtoBufNetworkSession() {}
     
-    virtual const SessionId& id() const = 0;
+    virtual ~INetworkConnection() {}
+    
     virtual const Address& remoteAddress() const = 0;
-    
     virtual iop::locnet::MessageWithHeader* ReceiveMessage() = 0;
     virtual void SendMessage(iop::locnet::MessageWithHeader &message) = 0;
-
+    
 // TODO Would be nice and more convenient to implement using these methods,
 //      but they do not seem to nicely fit ASIO
 //     virtual void KeepAlive() = 0;
 //     virtual bool IsAlive() const = 0;
 //     virtual void Close() = 0;
+};
+
+
+
+class ProtoBufNetworkSession
+{
+    std::shared_ptr<INetworkConnection> _connection;
+    std::unordered_map<uint32_t, std::promise<iop::locnet::Response>> _pendingRequests;
+    std::mutex _pendingRequestsMutex;
+    
+public:
+    
+    ProtoBufNetworkSession(std::shared_ptr<INetworkConnection> connection);
+    virtual ~ProtoBufNetworkSession() {}
+    
+    virtual const SessionId& id() const;
+    
+    virtual std::future<iop::locnet::Response> SendRequest(iop::locnet::Message &requestMessage);
+    virtual void ResponseArrived(const iop::locnet::Message &responseMessage);
 };
 
 
@@ -77,7 +95,7 @@ public:
     virtual ~IProtoBufRequestDispatcherFactory() {}
     
     virtual std::shared_ptr<IProtoBufRequestDispatcher> Create(
-        std::shared_ptr<IProtoBufNetworkSession> session ) = 0;
+        std::shared_ptr<ProtoBufNetworkSession> session ) = 0;
 };
 
 
@@ -110,7 +128,7 @@ public:
     LocalServiceRequestDispatcherFactory(std::shared_ptr<ILocalServiceMethods> iLocal);
     
     std::shared_ptr<IProtoBufRequestDispatcher> Create(
-        std::shared_ptr<IProtoBufNetworkSession> session ) override;
+        std::shared_ptr<ProtoBufNetworkSession> session ) override;
 };
 
 
@@ -125,7 +143,7 @@ public:
     StaticDispatcherFactory(std::shared_ptr<IProtoBufRequestDispatcher> dispatcher);
     
     std::shared_ptr<IProtoBufRequestDispatcher> Create(
-        std::shared_ptr<IProtoBufNetworkSession> session ) override;
+        std::shared_ptr<ProtoBufNetworkSession> session ) override;
 };
 
 
@@ -139,15 +157,15 @@ public:
     CombinedRequestDispatcherFactory(std::shared_ptr<Node> node);
     
     std::shared_ptr<IProtoBufRequestDispatcher> Create(
-        std::shared_ptr<IProtoBufNetworkSession> session ) override;
+        std::shared_ptr<ProtoBufNetworkSession> session ) override;
 };
 
 
-// Network session that uses a blocking TCP stream for the easiest implementation.
+// Network connection that uses a blocking TCP stream for the easiest implementation.
 // TODO ideally would use async networking, but it's hard in C++
 //      to implement a simple (blocking) interface using async operations.
 //      Maybe boost stackful coroutines could be useful here, but we shouldn't depend on boost.
-class ProtoBufTcpStreamSession : public IProtoBufNetworkSession
+class SyncTcpStreamNetworkConnection : public INetworkConnection
 {
     SessionId                               _id;
     Address                                 _remoteAddress;
@@ -156,11 +174,11 @@ class ProtoBufTcpStreamSession : public IProtoBufNetworkSession
     
 public:
     
-    ProtoBufTcpStreamSession(std::shared_ptr<asio::ip::tcp::socket> socket);
-    ProtoBufTcpStreamSession(const NetworkEndpoint &endpoint);
-    ~ProtoBufTcpStreamSession();
+    SyncTcpStreamNetworkConnection(std::shared_ptr<asio::ip::tcp::socket> socket);
+    SyncTcpStreamNetworkConnection(const NetworkEndpoint &endpoint);
+    ~SyncTcpStreamNetworkConnection();
     
-    const SessionId& id() const override;
+    const SessionId& id() const; // override;
     const Address& remoteAddress() const override;
     
     iop::locnet::MessageWithHeader* ReceiveMessage() override;
@@ -178,11 +196,11 @@ public:
 // and reads response messages from it.
 class ProtoBufRequestNetworkDispatcher : public IProtoBufRequestDispatcher
 {
-    std::shared_ptr<IProtoBufNetworkSession> _session;
+    std::shared_ptr<ProtoBufNetworkSession> _session;
     
 public:
 
-    ProtoBufRequestNetworkDispatcher(std::shared_ptr<IProtoBufNetworkSession> session);
+    ProtoBufRequestNetworkDispatcher(std::shared_ptr<ProtoBufNetworkSession> session);
     virtual ~ProtoBufRequestNetworkDispatcher() {}
     
     std::unique_ptr<iop::locnet::Response> Dispatch(const iop::locnet::Request &request) override;
@@ -191,7 +209,7 @@ public:
 
 
 // Connection factory that creates a blocking TCP stream to communicate with remote node.
-class TcpStreamConnectionFactory : public INodeConnectionFactory
+class TcpStreamNodeConnectionFactory : public INodeConnectionFactory
 {
     std::function<void(const Address&)> _detectedIpCallback;
     
@@ -207,11 +225,11 @@ public:
 // Factory implementation that creates ProtoBufTcpStreamChangeListener objects.
 class ProtoBufTcpStreamChangeListenerFactory : public IChangeListenerFactory
 {
-    std::shared_ptr<IProtoBufNetworkSession> _session;
+    std::shared_ptr<ProtoBufNetworkSession> _session;
     
 public:
     
-    ProtoBufTcpStreamChangeListenerFactory(std::shared_ptr<IProtoBufNetworkSession> session);
+    ProtoBufTcpStreamChangeListenerFactory(std::shared_ptr<ProtoBufNetworkSession> session);
     
     std::shared_ptr<IChangeListener> Create(
         std::shared_ptr<ILocalServiceMethods> localService) override;
@@ -230,7 +248,7 @@ class ProtoBufTcpStreamChangeListener : public IChangeListener
 public:
     
     ProtoBufTcpStreamChangeListener(
-        std::shared_ptr<IProtoBufNetworkSession> session,
+        std::shared_ptr<ProtoBufNetworkSession> session,
         std::shared_ptr<ILocalServiceMethods> localService,
         std::shared_ptr<IProtoBufRequestDispatcher> dispatcher );
     

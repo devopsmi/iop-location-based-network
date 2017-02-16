@@ -166,30 +166,29 @@ void ProtoBufDispatchingTcpServer::AsyncAcceptHandler(
             while (! _shutdownRequested)
             {
                 uint32_t messageId = 0;
-                shared_ptr<iop::locnet::MessageWithHeader> incomingMsg;
+                unique_ptr<iop::locnet::Message> incomingMsg;
                 unique_ptr<iop::locnet::Response> response;
                 
                 try
                 {
                     LOG(TRACE) << "Reading message";
-                    incomingMsg.reset( connection->ReceiveMessage() );
-
-                    if ( ! incomingMsg || ! incomingMsg->has_body() )
+                    incomingMsg = connection->ReceiveMessage();
+                    if (! incomingMsg)
                         { throw LocationNetworkError(ErrorCode::ERROR_BAD_REQUEST, "Missing message body"); }
                     
                     // If incoming response, connect it with the sent out request and skip further processing
-                    if ( incomingMsg->body().has_response() )
+                    if ( incomingMsg->has_response() )
                     {
-                        session->ResponseArrived(incomingMsg->body() );
+                        session->ResponseArrived(*incomingMsg);
                         continue;
                     }
                     
-                    if ( ! incomingMsg->body().has_response() )
+                    if ( ! incomingMsg->has_request() )
                         { throw LocationNetworkError(ErrorCode::ERROR_BAD_REQUEST, "Missing request"); }
                     
                     LOG(TRACE) << "Serving request";
-                    messageId = incomingMsg->body().id();
-                    auto request = incomingMsg->mutable_body()->mutable_request();
+                    messageId = incomingMsg->id();
+                    auto request = incomingMsg->mutable_request();
                     
                     // TODO the ip detection and keepalive features are violating the current layers of
                     //      business logic: Node / messaging: Dispatcher / network abstraction: Session.
@@ -256,9 +255,9 @@ void ProtoBufDispatchingTcpServer::AsyncAcceptHandler(
                 }
                 
                 LOG(TRACE) << "Sending response";
-                iop::locnet::MessageWithHeader responseMsg;
-                responseMsg.mutable_body()->set_allocated_response( response.release() );
-                responseMsg.mutable_body()->set_id(messageId);
+                iop::locnet::Message responseMsg;
+                responseMsg.set_allocated_response( response.release() );
+                responseMsg.set_id(messageId);
                 
                 connection->SendMessage(responseMsg);
             }
@@ -329,7 +328,7 @@ uint32_t GetMessageSizeFromHeader(const char *bytes)
 
 
 
-iop::locnet::MessageWithHeader* SyncTcpStreamNetworkConnection::ReceiveMessage()
+unique_ptr<iop::locnet::Message> SyncTcpStreamNetworkConnection::ReceiveMessage()
 {
     if ( _stream.eof() )
         { throw LocationNetworkError(ErrorCode::ERROR_INVALID_STATE,
@@ -364,16 +363,19 @@ iop::locnet::MessageWithHeader* SyncTcpStreamNetworkConnection::ReceiveMessage()
     google::protobuf::TextFormat::PrintToString(*message, &buffer);
     LOG(TRACE) << "Connection " << id() << " received message " << buffer;
     
-    return message.release();
+    return unique_ptr<iop::locnet::Message>( message->release_body() );;
 }
 
 
 
-void SyncTcpStreamNetworkConnection::SendMessage(iop::locnet::MessageWithHeader& message)
+void SyncTcpStreamNetworkConnection::SendMessage(iop::locnet::Message& message)
 {
-    message.set_header(1);
-    message.set_header( message.ByteSize() - MessageHeaderSize );
-    _stream << message.SerializeAsString();
+    iop::locnet::MessageWithHeader messageWithHeader;
+    messageWithHeader.set_allocated_body( new iop::locnet::Message(message) );
+    
+    messageWithHeader.set_header(1);
+    messageWithHeader.set_header( messageWithHeader.ByteSize() - MessageHeaderSize );
+    _stream << messageWithHeader.SerializeAsString();
     
     string buffer;
     google::protobuf::TextFormat::PrintToString(message, &buffer);
@@ -391,6 +393,52 @@ void SyncTcpStreamNetworkConnection::SendMessage(iop::locnet::MessageWithHeader&
 // 
 // void ProtoBufTcpStreamSession::Close()
 //     { _stream.close(); }
+
+
+
+ProtoBufNetworkSession::ProtoBufNetworkSession(shared_ptr<INetworkConnection> connection) :
+    _connection(connection), _nextMessageId(1)
+{
+    if (_connection == nullptr)
+        { throw LocationNetworkError(ErrorCode::ERROR_INTERNAL, "No connection instantiated"); }
+}
+
+
+const SessionId& ProtoBufNetworkSession::id() const
+    { return _connection->id(); }
+
+
+future<iop::locnet::Response> ProtoBufNetworkSession::SendRequest(iop::locnet::Message& requestMessage)
+{
+    if (! requestMessage.has_request() )
+        { throw LocationNetworkError(ErrorCode::ERROR_INTERNAL, "Attempt to send non-request message"); }
+
+    lock_guard<mutex> pendingRequestGuard(_pendingRequestsMutex);
+    uint32_t messageId = _nextMessageId++;
+    auto emplaceResult = _pendingRequests.emplace(messageId, promise<iop::locnet::Response>());
+    if (! emplaceResult.second)
+        { throw LocationNetworkError(ErrorCode::ERROR_INTERNAL, "Failed to store pending request"); }
+    
+    _connection->SendMessage(requestMessage);
+    
+    return emplaceResult.first->second.get_future();
+}
+
+
+void ProtoBufNetworkSession::ResponseArrived(const iop::locnet::Message& responseMessage)
+{
+    uint32_t messageId = responseMessage.id();
+    if (! responseMessage.has_response() )
+        { throw LocationNetworkError(ErrorCode::ERROR_INTERNAL, "Attempt to receive non-response message"); }
+    
+    lock_guard<mutex> pendingRequestGuard(_pendingRequestsMutex);
+    auto requestIter = _pendingRequests.find(messageId);
+    if ( requestIter == _pendingRequests.end() )
+        { throw LocationNetworkError(ErrorCode::ERROR_PROTOCOL_VIOLATION, "No request found for message id " + to_string(messageId)); }
+    
+    requestIter->second.set_value( responseMessage.response() );
+    _pendingRequests.erase(requestIter);
+}
 
 
 

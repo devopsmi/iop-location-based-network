@@ -54,9 +54,11 @@ public:
     
     virtual ~INetworkConnection() {}
     
+    virtual const SessionId& id() const = 0;
     virtual const Address& remoteAddress() const = 0;
-    virtual iop::locnet::MessageWithHeader* ReceiveMessage() = 0;
-    virtual void SendMessage(iop::locnet::MessageWithHeader &message) = 0;
+    
+    virtual std::unique_ptr<iop::locnet::Message> ReceiveMessage() = 0;
+    virtual void SendMessage(iop::locnet::Message &message) = 0;
     
 // TODO Would be nice and more convenient to implement using these methods,
 //      but they do not seem to nicely fit ASIO
@@ -70,6 +72,8 @@ public:
 class ProtoBufNetworkSession
 {
     std::shared_ptr<INetworkConnection> _connection;
+    
+    uint32_t _nextMessageId;
     std::unordered_map<uint32_t, std::promise<iop::locnet::Response>> _pendingRequests;
     std::mutex _pendingRequestsMutex;
     
@@ -178,11 +182,11 @@ public:
     SyncTcpStreamNetworkConnection(const NetworkEndpoint &endpoint);
     ~SyncTcpStreamNetworkConnection();
     
-    const SessionId& id() const; // override;
+    const SessionId& id() const override;
     const Address& remoteAddress() const override;
     
-    iop::locnet::MessageWithHeader* ReceiveMessage() override;
-    void SendMessage(iop::locnet::MessageWithHeader &message) override;
+    std::unique_ptr<iop::locnet::Message> ReceiveMessage() override;
+    void SendMessage(iop::locnet::Message &message) override;
     
 // TODO implement these
 //     void KeepAlive() override;

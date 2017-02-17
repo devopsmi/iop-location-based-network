@@ -2,7 +2,6 @@
 #define __LOCNET_ASIO_NETWORK_H__
 
 #include <functional>
-#include <future>
 #include <memory>
 #include <thread>
 
@@ -58,7 +57,7 @@ public:
     virtual const Address& remoteAddress() const = 0;
     
     virtual std::unique_ptr<iop::locnet::Message> ReceiveMessage() = 0;
-    virtual void SendMessage(iop::locnet::Message &message) = 0;
+    virtual void SendMessage(std::unique_ptr<iop::locnet::Message> &&message) = 0;
     
 // TODO Would be nice and more convenient to implement using these methods,
 //      but they do not seem to nicely fit ASIO
@@ -84,7 +83,8 @@ public:
     
     virtual const SessionId& id() const;
     
-    virtual std::future<iop::locnet::Response> SendRequest(iop::locnet::Message &requestMessage);
+    virtual std::future<iop::locnet::Response> SendRequest(
+        std::unique_ptr<iop::locnet::Message> &&requestMessage);
     virtual void ResponseArrived(const iop::locnet::Message &responseMessage);
 };
 
@@ -173,8 +173,8 @@ class SyncTcpStreamNetworkConnection : public INetworkConnection
 {
     SessionId                               _id;
     Address                                 _remoteAddress;
-    asio::ip::tcp::iostream                 _stream;
     std::shared_ptr<asio::ip::tcp::socket>  _socket;
+    std::mutex                              _accessMutex;
     
 public:
     
@@ -186,7 +186,7 @@ public:
     const Address& remoteAddress() const override;
     
     std::unique_ptr<iop::locnet::Message> ReceiveMessage() override;
-    void SendMessage(iop::locnet::Message &message) override;
+    void SendMessage(std::unique_ptr<iop::locnet::Message> &&message) override;
     
 // TODO implement these
 //     void KeepAlive() override;

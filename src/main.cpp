@@ -46,7 +46,7 @@ int main(int argc, const char *argv[])
         shared_ptr<ISpatialDatabase> geodb( new SpatiaLiteDatabase(
             myNodeInfo, config.dbPath(), config.dbExpirationPeriod() ) );
 
-        TcpStreamConnectionFactory *connFactPtr = new TcpStreamConnectionFactory();
+        TcpStreamNodeConnectionFactory *connFactPtr = new TcpStreamNodeConnectionFactory();
         shared_ptr<INodeConnectionFactory> connectionFactory(connFactPtr);
         shared_ptr<Node> node( new Node(geodb, connectionFactory) );
 

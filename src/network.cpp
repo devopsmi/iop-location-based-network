@@ -255,11 +255,11 @@ void ProtoBufDispatchingTcpServer::AsyncAcceptHandler(
                 }
                 
                 LOG(TRACE) << "Sending response";
-                iop::locnet::Message responseMsg;
-                responseMsg.set_allocated_response( response.release() );
-                responseMsg.set_id(messageId);
+                unique_ptr<iop::locnet::Message> responseMsg( new iop::locnet::Message() );
+                responseMsg->set_allocated_response( response.release() );
+                responseMsg->set_id(messageId);
                 
-                connection->SendMessage(responseMsg);
+                connection->SendMessage( move(responseMsg) );
             }
         }
         catch (exception &ex)
@@ -278,7 +278,7 @@ void ProtoBufDispatchingTcpServer::AsyncAcceptHandler(
 
 
 SyncTcpStreamNetworkConnection::SyncTcpStreamNetworkConnection(shared_ptr<tcp::socket> socket) :
-    _id(), _remoteAddress(), _stream(), _socket(socket)
+    _id(), _remoteAddress(), _stream(), _socket(socket), _accessMutex()
 {
     if (! _socket)
         { throw LocationNetworkError(ErrorCode::ERROR_INTERNAL, "No socket instantiated"); }
@@ -297,7 +297,7 @@ SyncTcpStreamNetworkConnection::SyncTcpStreamNetworkConnection(shared_ptr<tcp::s
 
 SyncTcpStreamNetworkConnection::SyncTcpStreamNetworkConnection(const NetworkEndpoint &endpoint) :
     _id( endpoint.address() + ":" + to_string( endpoint.port() ) ),
-    _remoteAddress( endpoint.address() ), _stream(), _socket()
+    _remoteAddress( endpoint.address() ), _stream(), _socket(), _accessMutex()
 {
     _stream.expires_after( GetNormalStreamExpirationPeriod() );
     _stream.connect( endpoint.address(), to_string( endpoint.port() ) );
@@ -330,6 +330,8 @@ uint32_t GetMessageSizeFromHeader(const char *bytes)
 
 unique_ptr<iop::locnet::Message> SyncTcpStreamNetworkConnection::ReceiveMessage()
 {
+    lock_guard<mutex> accessGuard(_accessMutex);
+    
     if ( _stream.eof() )
         { throw LocationNetworkError(ErrorCode::ERROR_INVALID_STATE,
             "Connection " + id() + " is already closed, cannot read message"); }
@@ -368,17 +370,19 @@ unique_ptr<iop::locnet::Message> SyncTcpStreamNetworkConnection::ReceiveMessage(
 
 
 
-void SyncTcpStreamNetworkConnection::SendMessage(iop::locnet::Message& message)
+void SyncTcpStreamNetworkConnection::SendMessage(unique_ptr<iop::locnet::Message> &&message)
 {
+    lock_guard<mutex> accessGuard(_accessMutex);
+    
     iop::locnet::MessageWithHeader messageWithHeader;
-    messageWithHeader.set_allocated_body( new iop::locnet::Message(message) );
+    messageWithHeader.set_allocated_body( message.release() );
     
     messageWithHeader.set_header(1);
     messageWithHeader.set_header( messageWithHeader.ByteSize() - MessageHeaderSize );
     _stream << messageWithHeader.SerializeAsString();
     
     string buffer;
-    google::protobuf::TextFormat::PrintToString(message, &buffer);
+    google::protobuf::TextFormat::PrintToString( messageWithHeader.body(), &buffer );
     LOG(TRACE) << "Connection " << id() << " sent message " << buffer;
 }
 
@@ -408,9 +412,10 @@ const SessionId& ProtoBufNetworkSession::id() const
     { return _connection->id(); }
 
 
-future<iop::locnet::Response> ProtoBufNetworkSession::SendRequest(iop::locnet::Message& requestMessage)
+future<iop::locnet::Response> ProtoBufNetworkSession::SendRequest(
+    unique_ptr<iop::locnet::Message> &&requestMessage)
 {
-    if (! requestMessage.has_request() )
+    if (! requestMessage->has_request() )
         { throw LocationNetworkError(ErrorCode::ERROR_INTERNAL, "Attempt to send non-request message"); }
 
     lock_guard<mutex> pendingRequestGuard(_pendingRequestsMutex);
@@ -419,7 +424,8 @@ future<iop::locnet::Response> ProtoBufNetworkSession::SendRequest(iop::locnet::M
     if (! emplaceResult.second)
         { throw LocationNetworkError(ErrorCode::ERROR_INTERNAL, "Failed to store pending request"); }
     
-    _connection->SendMessage(requestMessage);
+    requestMessage->set_id(messageId);
+    _connection->SendMessage( move(requestMessage) );
     
     return emplaceResult.first->second.get_future();
 }
@@ -451,13 +457,12 @@ ProtoBufRequestNetworkDispatcher::ProtoBufRequestNetworkDispatcher(
 unique_ptr<iop::locnet::Response> ProtoBufRequestNetworkDispatcher::Dispatch(
     const iop::locnet::Request& request)
 {
+    unique_ptr<iop::locnet::Message> reqMsg( new iop::locnet::Message() );
     iop::locnet::Request *clonedReq = new iop::locnet::Request(request);
     clonedReq->set_version({1,0,0});
+    reqMsg->set_allocated_request(clonedReq);
     
-    iop::locnet::Message reqMsg;
-    reqMsg.set_allocated_request(clonedReq);
-    
-    std::future<iop::locnet::Response> futureResponse = _session->SendRequest(reqMsg);
+    std::future<iop::locnet::Response> futureResponse = _session->SendRequest( move(reqMsg) );
     if ( futureResponse.wait_for( GetNormalStreamExpirationPeriod() ) != future_status::ready )
     {
         LOG(WARNING) << "Session " << _session->id() << " received no response, timed out";

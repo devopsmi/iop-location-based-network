@@ -38,13 +38,14 @@ SCENARIO("TCP networking", "[network]")
         THEN("It serves clients via sync TCP")
         {
             const NodeContact &BudapestNodeContact( TestData::NodeBudapest.contact() );
-            shared_ptr<IProtoBufNetworkSession> clientSession(
-                new ProtoBufTcpStreamSession( BudapestNodeContact.nodeEndpoint() ) );
+            shared_ptr<INetworkConnection> connection( new SyncTcpStreamNetworkConnection(
+                BudapestNodeContact.nodeEndpoint() ) );
+            shared_ptr<ProtoBufNetworkSession> clientSession( new ProtoBufNetworkSession(connection) );
             
             {
-                iop::locnet::MessageWithHeader requestMsg;
-                requestMsg.mutable_body()->mutable_request()->mutable_localservice()->mutable_getneighbournodes();
-                requestMsg.mutable_body()->mutable_request()->set_version({1,0,0});
+                iop::locnet::Message requestMsg;
+                requestMsg.mutable_request()->mutable_localservice()->mutable_getneighbournodes();
+                requestMsg.mutable_request()->set_version({1,0,0});
                 clientSession->SendMessage(requestMsg);
                 
                 unique_ptr<iop::locnet::MessageWithHeader> msgReceived( clientSession->ReceiveMessage() );

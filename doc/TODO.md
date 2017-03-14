@@ -1,6 +1,6 @@
 # Future work and improvements
 
-The project is currently a proof-of-concept prototype state.
+The project is currently in a proof-of-concept prototype state.
 Though the source code is supposed to be functional, there is a lot of room for improvements.
 
 
@@ -21,36 +21,26 @@ to come up with an initial version as soon as possible.
 Accordingly, you can find a lot of `// TODO` comments in the source
 calling to (re)consider algorithms, error handling and other implementations.
 
-Though using the easylogging++ library is very convenient, we recently experienced some strange behaviour with it.
-To be thread-safe it needs to have `#define ELPP_THREAD_SAFE` in all files where it's used,
-currently this is set as compiler option with cmake. However, we experienced very rare and undeterministic
-errors (e.g. "pure virtual method called", probably it calls a method of an uninitialized derived class
-during construction) with a stacktrace pointing to construction of logger objects.
-If these occur in the future and cannot be easily fixed by upgrading to later bugfix releases,
-we may have to use a different logging library.
-
 
 ## Architecture
 
-During integration tests with the profile server we found that we might have to change
-messaging implementation to be more generic. So far we used synchronous messaging, i.e.
-it was always clear when our server expects a request and when to send a response.
-The profile server uses asynchronous messaging, messages have no specific ordering.
-This implies that currently a proper integration needs two separate connections,
-one to send notifications and another to receive requests. Instead this we should also change
-to use asynchronous messaging to be more conformant.
-
-Currently changes (e.g. changed host IP or new registered profile server on this node)
-are spread within the network only during node relation renewals. It may worth considering
-to broadcast changed IPs or services immediately if during tests we find that
-slow refreshes cause an unsatisfying network behaviour.
+Currently all network communication uses blocking implementations.
+Each client has its own thread, so it does not cause problems most of the time.
+However, some operations are already done asynchronously.
+When a service (e.g. a profile server) registers, notifications to neighbour nodes
+are queued as async tasks after a response is returned to the service.
+Currently all async tasks use the same queue, but this causes problems.
+If some neighbours are unreachable, a single notification may block for a very long time,
+making the server unresponsive because socket accepts are also served asynchronously
+from the same task queue. The best way to fix this may be to use asio::strand to separate queues of different
+(e.g. fast and potientially slow) tasks.
 
 Our current implementation uses a local database to store just a sparse subset of all the nodes
 of the network, but this is not necessarily the only direction.
 We could also experiment with using a distributed hash table (DHT).
 The advantage would be having a single, full node list of the whole network,
 readable by every node. Each node could write only its own details
-(e.g. when joining the network or changing its IP addresS).
+(e.g. when joining the network or changing its IP address).
 Note that this direction has shortcomings to solve: as far as we know
 it would not work locally if a country blocks external internet access,
 see e.g. Great Firewall of China. However, it might be possible to create
@@ -123,7 +113,7 @@ If we find no conceptual problems we should identify attack vectors and protect 
 
 ## Optimization and Performance
 
-Socket connections are accepted asynchronously using asio using only a single thread.
+Socket connections are accepted asynchronously with asio using only a single thread.
 However, it is much harder to use async operations to implement interfaces
 not designed directly for an async workflow (e.g. NetworkSession).
 Consequently, each session currently uses its own separate thread.
@@ -132,20 +122,18 @@ it might worth to implement sessions asynchronously.
 We might either redesign interfaces like session to directly support async operations or
 try to implement the same interface with async operations using something like
 [Boost stackful courutines](http://www.boost.org/doc/libs/1_62_0/doc/html/boost_asio/overview/core/spawn.html)
-but then we would depend also on Boost.
+but then we would depend also on Boost. Probably the best direction is to use
+std::future to make interfaces async and trigger their notification with std::promise.
+This work was started in branch `feature/async-messaging` but was abandoned
+to progress with integration tasks. It's half baked now, finishing it needs more
+work and merging recent changes from master.
 
 If connections take up too much resources, we could also improve code by expiring accepted
-inactive connections. Currently this is done only on the client side (connecting to other nodes) yet.
-Implementing this on the accepting side is harder because of the blocking implementation.
-Asio uses expiration timers to handle this which work fine most of the time,
-so you can just set up a timeout after a minute and the connection will be automatically closed.
-However, when the localservice interface receives a GetNeighbourhood request,
-it must keep the connection alive and send notifications when neighbourhood changes.
-Unfortunately we found no working way to disable the timer if it's already set up.
-Using asynch mode one can differentiate the "timer expired" event from the "timer disabled"
-event by checking an error code, but with the blocking streaming implementation
-we found that the stream is closed even when you disable the timer,
-probably this error code is not checked in the implementation as we'd expect.
+inactive connections. Implementing this would need to use async timers.
+However, we have to keep in mind that when the localservice interface receives
+a GetNeighbourhood request, it must keep the connection alive and send notifications
+when neighbourhood changes. It can be done by differentiating the
+"timer expired" event from the "timer disabled" event by checking an error code.
 
 We could improve both code structure and compile times. One direction could be restructuring
 sources and using a specific framework header (e.g. asio, ezOptionParser, etc)

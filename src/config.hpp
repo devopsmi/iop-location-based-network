@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <memory>
+#include <vector>
 
 #include "basic.hpp"
 
@@ -23,6 +24,10 @@ protected:
     bool _testMode = false;
     
     virtual bool Initialize(int argc, const char *argv[]) = 0;
+    
+    Config();
+    Config(const Config &other) = delete;
+    Config& operator=(const Config &other) = delete;
     
 public:
 

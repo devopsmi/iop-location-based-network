@@ -11,6 +11,8 @@ namespace LocNet
 
 
 const GpsCoordinate GPS_COORDINATE_PROTOBUF_INT_MULTIPLIER = 1000000.;
+//const chrono::duration<int> DELAYED_DISPATCHER_TIMEOUT = chrono::seconds(10);
+
 
 
 GpsLocation Converter::FromProtoBuf(const iop::locnet::GpsLocation& value)
@@ -39,8 +41,8 @@ iop::locnet::Status Converter::ToProtoBuf(ErrorCode value)
         case ErrorCode::ERROR_CONCEPTUAL:           return iop::locnet::Status::ERROR_INTERNAL;
         case ErrorCode::ERROR_CONNECTION:           return iop::locnet::Status::ERROR_INTERNAL;
         case ErrorCode::ERROR_INTERNAL:             return iop::locnet::Status::ERROR_INTERNAL;
-        case ErrorCode::ERROR_INVALID_DATA:         return iop::locnet::Status::ERROR_INVALID_VALUE;
-        case ErrorCode::ERROR_INVALID_STATE:        return iop::locnet::Status::ERROR_INTERNAL;
+        case ErrorCode::ERROR_INVALID_VALUE:        return iop::locnet::Status::ERROR_INVALID_VALUE;
+        case ErrorCode::ERROR_BAD_STATE:            return iop::locnet::Status::ERROR_INTERNAL;
         case ErrorCode::ERROR_PROTOCOL_VIOLATION:   return iop::locnet::Status::ERROR_PROTOCOL_VIOLATION;
         case ErrorCode::ERROR_UNSUPPORTED:          return iop::locnet::Status::ERROR_UNSUPPORTED;
         default: throw LocationNetworkError(ErrorCode::ERROR_INTERNAL, "Conversion for error code not implemented");
@@ -71,7 +73,7 @@ ServiceType Converter::FromProtoBuf(iop::locnet::ServiceType value)
         case iop::locnet::ServiceType::Relay:       return ServiceType::Relay;
         case iop::locnet::ServiceType::Reputation:  return ServiceType::Reputation;
         case iop::locnet::ServiceType::Minting:     return ServiceType::Minting;
-        default: throw LocationNetworkError(ErrorCode::ERROR_INVALID_DATA, "Missing or unknown service type");
+        default: throw LocationNetworkError(ErrorCode::ERROR_INVALID_VALUE, "Missing or unknown service type");
     }
 }
 
@@ -104,9 +106,9 @@ ServiceInfo Converter::FromProtoBuf(const iop::locnet::ServiceInfo& value)
 NodeInfo Converter::FromProtoBuf(const iop::locnet::NodeInfo& value)
 {
     if ( value.nodeid().empty() )
-        { throw LocationNetworkError(ErrorCode::ERROR_INVALID_DATA, "No id present for node"); }
+        { throw LocationNetworkError(ErrorCode::ERROR_INVALID_VALUE, "No id present for node"); }
     if ( ! value.has_contact() )
-        { throw LocationNetworkError(ErrorCode::ERROR_INVALID_DATA, "No contact information for node"); }
+        { throw LocationNetworkError(ErrorCode::ERROR_INVALID_VALUE, "No contact information for node"); }
 
     const iop::locnet::NodeContact &contact = value.contact();
         
@@ -187,16 +189,16 @@ IncomingLocalServiceRequestDispatcher::IncomingLocalServiceRequestDispatcher(
 
 // TODO Dispatchers simply translate between different data formats, ideally this should be generated.
 unique_ptr<iop::locnet::Response> IncomingLocalServiceRequestDispatcher::Dispatch(
-    const iop::locnet::Request& request)
+    unique_ptr<iop::locnet::Request> &&request)
 {
     // TODO this version check is shared between different interfaces, use a shared implementation here
-    if ( request.version().empty() || request.version()[0] != 1 )
+    if ( request->version().empty() || request->version()[0] != 1 )
         { throw LocationNetworkError(ErrorCode::ERROR_UNSUPPORTED, "Missing or unknown request version"); }
     
-    if ( ! request.has_localservice() )
+    if ( ! request->has_localservice() )
         { throw LocationNetworkError(ErrorCode::ERROR_BAD_REQUEST, "This interface serves only local service requests"); }
     
-    const iop::locnet::LocalServiceRequest &localServiceRequest = request.localservice();
+    const iop::locnet::LocalServiceRequest &localServiceRequest = request->localservice();
     unique_ptr<iop::locnet::Response> result( new iop::locnet::Response() );
     iop::locnet::LocalServiceResponse *localServiceResponse = result->mutable_localservice();
     
@@ -273,15 +275,15 @@ IncomingNodeRequestDispatcher::IncomingNodeRequestDispatcher(shared_ptr<INodeMet
 
 
 
-unique_ptr<iop::locnet::Response> IncomingNodeRequestDispatcher::Dispatch(const iop::locnet::Request& request)
+unique_ptr<iop::locnet::Response> IncomingNodeRequestDispatcher::Dispatch(unique_ptr<iop::locnet::Request> &&request)
 {
-    if ( request.version().empty() || request.version()[0] != 1 )
+    if ( request->version().empty() || request->version()[0] != 1 )
         { throw LocationNetworkError(ErrorCode::ERROR_UNSUPPORTED, "Missing or unknown request version"); }
     
-    if ( ! request.has_remotenode() )
+    if ( ! request->has_remotenode() )
         { throw LocationNetworkError(ErrorCode::ERROR_BAD_REQUEST, "This interface serves only remote node requests"); }
     
-    const iop::locnet::RemoteNodeRequest &nodeRequest = request.remotenode();
+    const iop::locnet::RemoteNodeRequest &nodeRequest = request->remotenode();
     unique_ptr<iop::locnet::Response> result( new iop::locnet::Response() );
     iop::locnet::RemoteNodeResponse *nodeResponse = result->mutable_remotenode();
     
@@ -431,15 +433,15 @@ IncomingClientRequestDispatcher::IncomingClientRequestDispatcher(shared_ptr<ICli
 
 
 
-unique_ptr<iop::locnet::Response> IncomingClientRequestDispatcher::Dispatch(const iop::locnet::Request& request)
+unique_ptr<iop::locnet::Response> IncomingClientRequestDispatcher::Dispatch(unique_ptr<iop::locnet::Request> &&request)
 {
-    if ( request.version().empty() || request.version()[0] != 1 )
+    if ( request->version().empty() || request->version()[0] != 1 )
         { throw LocationNetworkError(ErrorCode::ERROR_UNSUPPORTED, "Missing or unknown request version"); }
     
-    if ( ! request.has_client() )
+    if ( ! request->has_client() )
         { throw LocationNetworkError(ErrorCode::ERROR_BAD_REQUEST, "This interface serves only client requests"); }
     
-    const iop::locnet::ClientRequest &clientRequest = request.client();
+    const iop::locnet::ClientRequest &clientRequest = request->client();
     unique_ptr<iop::locnet::Response> result( new iop::locnet::Response() );
     iop::locnet::ClientResponse *clientResponse = result->mutable_client();
     
@@ -527,18 +529,18 @@ IncomingRequestDispatcher::IncomingRequestDispatcher(
     
 
 
-unique_ptr<iop::locnet::Response> IncomingRequestDispatcher::Dispatch(const iop::locnet::Request& request)
+unique_ptr<iop::locnet::Response> IncomingRequestDispatcher::Dispatch(unique_ptr<iop::locnet::Request> &&request)
 {
-    switch ( request.RequestType_case() )
+    switch ( request->RequestType_case() )
     {
         case iop::locnet::Request::kLocalService:
-            return _iLocalService->Dispatch(request);
+            return _iLocalService->Dispatch( move(request) );
             
         case iop::locnet::Request::kRemoteNode:
-            return _iRemoteNode->Dispatch(request);
+            return _iRemoteNode->Dispatch( move(request) );
             
         case iop::locnet::Request::kClient:
-            return _iClient->Dispatch(request);
+            return _iClient->Dispatch( move(request) );
             
         default: throw LocationNetworkError(ErrorCode::ERROR_BAD_REQUEST, "Missing or unknown request type");
     }
@@ -547,7 +549,8 @@ unique_ptr<iop::locnet::Response> IncomingRequestDispatcher::Dispatch(const iop:
 
 
 NodeMethodsProtoBufClient::NodeMethodsProtoBufClient(
-    std::shared_ptr<IProtoBufRequestDispatcher> dispatcher, std::function<void(const Address&)> detectedIpCallback) :
+    //std::shared_ptr<IDelayedRequestDispatcher> dispatcher, std::function<void(const Address&)> detectedIpCallback) :
+    std::shared_ptr<IBlockingRequestDispatcher> dispatcher, std::function<void(const Address&)> detectedIpCallback) :
     _dispatcher(dispatcher), _detectedIpCallback(detectedIpCallback)
 {
     if (! _dispatcher)
@@ -559,10 +562,13 @@ NodeMethodsProtoBufClient::NodeMethodsProtoBufClient(
 // TODO All methods simply translate between different data formats, ideally this should be generated.
 NodeInfo NodeMethodsProtoBufClient::GetNodeInfo() const
 {
-    iop::locnet::Request request;
-    request.mutable_remotenode()->mutable_getnodeinfo();
+    unique_ptr<iop::locnet::Request> request( new iop::locnet::Request() );
+    request->mutable_remotenode()->mutable_getnodeinfo();
     
-    unique_ptr<iop::locnet::Response> response = _dispatcher->Dispatch(request);
+//     future<unique_ptr<iop::locnet::Response>> futureResponse = _dispatcher->Dispatch( move(request) );
+//     if ( futureResponse.wait_for(DELAYED_DISPATCHER_TIMEOUT) != future_status::ready)
+//         { throw LocationNetworkError(ErrorCode::ERROR_CONNECTION, "Connection to remote peer timed out"); }
+    unique_ptr<iop::locnet::Response> response = _dispatcher->Dispatch( move(request) );;
     if (! response || ! response->has_remotenode() || ! response->remotenode().has_getnodeinfo() )
         { throw LocationNetworkError(ErrorCode::ERROR_BAD_RESPONSE, "Failed to get expected response"); }
     
@@ -575,10 +581,10 @@ NodeInfo NodeMethodsProtoBufClient::GetNodeInfo() const
 
 size_t NodeMethodsProtoBufClient::GetNodeCount() const
 {
-    iop::locnet::Request request;
-    request.mutable_remotenode()->mutable_getnodecount();
+    unique_ptr<iop::locnet::Request> request( new iop::locnet::Request() );
+    request->mutable_remotenode()->mutable_getnodecount();
     
-    unique_ptr<iop::locnet::Response> response = _dispatcher->Dispatch(request);
+    unique_ptr<iop::locnet::Response> response = _dispatcher->Dispatch( move(request) );
     if (! response || ! response->has_remotenode() || ! response->remotenode().has_getnodecount() )
         { throw LocationNetworkError(ErrorCode::ERROR_BAD_RESPONSE, "Failed to get expected response"); }
     
@@ -591,11 +597,11 @@ size_t NodeMethodsProtoBufClient::GetNodeCount() const
 
 shared_ptr<NodeInfo> NodeMethodsProtoBufClient::AcceptColleague(const NodeInfo& node)
 {
-    iop::locnet::Request request;
-    request.mutable_remotenode()->mutable_acceptcolleague()->set_allocated_requestornodeinfo(
+    unique_ptr<iop::locnet::Request> request( new iop::locnet::Request() );
+    request->mutable_remotenode()->mutable_acceptcolleague()->set_allocated_requestornodeinfo(
         Converter::ToProtoBuf(node) );
     
-    unique_ptr<iop::locnet::Response> response = _dispatcher->Dispatch(request);
+    unique_ptr<iop::locnet::Response> response = _dispatcher->Dispatch( move(request) );
     if (! response || ! response->has_remotenode() || ! response->remotenode().has_acceptcolleague() )
         { throw LocationNetworkError(ErrorCode::ERROR_BAD_RESPONSE, "Failed to get expected response"); }
     
@@ -618,11 +624,11 @@ shared_ptr<NodeInfo> NodeMethodsProtoBufClient::AcceptColleague(const NodeInfo& 
 
 shared_ptr<NodeInfo> NodeMethodsProtoBufClient::RenewColleague(const NodeInfo& node)
 {
-    iop::locnet::Request request;
-    request.mutable_remotenode()->mutable_renewcolleague()->set_allocated_requestornodeinfo(
+    unique_ptr<iop::locnet::Request> request( new iop::locnet::Request() );
+    request->mutable_remotenode()->mutable_renewcolleague()->set_allocated_requestornodeinfo(
         Converter::ToProtoBuf(node) );
     
-    unique_ptr<iop::locnet::Response> response = _dispatcher->Dispatch(request);
+    unique_ptr<iop::locnet::Response> response = _dispatcher->Dispatch( move(request) );
     if (! response || ! response->has_remotenode() || ! response->remotenode().has_renewcolleague() )
         { throw LocationNetworkError(ErrorCode::ERROR_BAD_RESPONSE, "Failed to get expected response"); }
     
@@ -645,11 +651,11 @@ shared_ptr<NodeInfo> NodeMethodsProtoBufClient::RenewColleague(const NodeInfo& n
 
 shared_ptr<NodeInfo> NodeMethodsProtoBufClient::AcceptNeighbour(const NodeInfo& node)
 {
-    iop::locnet::Request request;
-    request.mutable_remotenode()->mutable_acceptneighbour()->set_allocated_requestornodeinfo(
+    unique_ptr<iop::locnet::Request> request( new iop::locnet::Request() );
+    request->mutable_remotenode()->mutable_acceptneighbour()->set_allocated_requestornodeinfo(
         Converter::ToProtoBuf(node) );
     
-    unique_ptr<iop::locnet::Response> response = _dispatcher->Dispatch(request);
+    unique_ptr<iop::locnet::Response> response = _dispatcher->Dispatch( move(request) );
     if (! response || ! response->has_remotenode() || ! response->remotenode().has_acceptneighbour() )
         { throw LocationNetworkError(ErrorCode::ERROR_BAD_RESPONSE, "Failed to get expected response"); }
     
@@ -672,11 +678,11 @@ shared_ptr<NodeInfo> NodeMethodsProtoBufClient::AcceptNeighbour(const NodeInfo& 
 
 shared_ptr<NodeInfo> NodeMethodsProtoBufClient::RenewNeighbour(const NodeInfo& node)
 {
-    iop::locnet::Request request;
-    request.mutable_remotenode()->mutable_renewneighbour()->set_allocated_requestornodeinfo(
+    unique_ptr<iop::locnet::Request> request( new iop::locnet::Request() );
+    request->mutable_remotenode()->mutable_renewneighbour()->set_allocated_requestornodeinfo(
         Converter::ToProtoBuf(node) );
     
-    unique_ptr<iop::locnet::Response> response = _dispatcher->Dispatch(request);
+    unique_ptr<iop::locnet::Response> response = _dispatcher->Dispatch( move(request) );
     if (! response || ! response->has_remotenode() || ! response->remotenode().has_renewneighbour() )
         { throw LocationNetworkError(ErrorCode::ERROR_BAD_RESPONSE, "Failed to get expected response"); }
     
@@ -700,12 +706,12 @@ shared_ptr<NodeInfo> NodeMethodsProtoBufClient::RenewNeighbour(const NodeInfo& n
 vector<NodeInfo> NodeMethodsProtoBufClient::GetRandomNodes(
     size_t maxNodeCount, Neighbours filter) const
 {
-    iop::locnet::Request request;
-    iop::locnet::GetRandomNodesRequest *getRandReq = request.mutable_remotenode()->mutable_getrandomnodes();
+    unique_ptr<iop::locnet::Request> request( new iop::locnet::Request() );
+    iop::locnet::GetRandomNodesRequest *getRandReq = request->mutable_remotenode()->mutable_getrandomnodes();
     getRandReq->set_maxnodecount(maxNodeCount);
     getRandReq->set_includeneighbours( filter == Neighbours::Included );
     
-    unique_ptr<iop::locnet::Response> response = _dispatcher->Dispatch(request);
+    unique_ptr<iop::locnet::Response> response = _dispatcher->Dispatch( move(request) );
     if (! response || ! response->has_remotenode() || ! response->remotenode().has_getrandomnodes() )
         { throw LocationNetworkError(ErrorCode::ERROR_BAD_RESPONSE, "Failed to get expected response"); }
     
@@ -722,15 +728,15 @@ vector<NodeInfo> NodeMethodsProtoBufClient::GetRandomNodes(
 vector<NodeInfo> NodeMethodsProtoBufClient::GetClosestNodesByDistance(
     const GpsLocation& location, Distance radiusKm, size_t maxNodeCount, Neighbours filter) const
 {
-    iop::locnet::Request request;
+    unique_ptr<iop::locnet::Request> request( new iop::locnet::Request() );
     iop::locnet::GetClosestNodesByDistanceRequest *getNodeReq =
-        request.mutable_remotenode()->mutable_getclosestnodes();
+        request->mutable_remotenode()->mutable_getclosestnodes();
     getNodeReq->set_allocated_location( Converter::ToProtoBuf(location) );
     getNodeReq->set_maxradiuskm(radiusKm);
     getNodeReq->set_maxnodecount(maxNodeCount);
     getNodeReq->set_includeneighbours( filter == Neighbours::Included );
     
-    unique_ptr<iop::locnet::Response> response = _dispatcher->Dispatch(request);
+    unique_ptr<iop::locnet::Response> response = _dispatcher->Dispatch( move(request) );
     if (! response || ! response->has_remotenode() || ! response->remotenode().has_getclosestnodes() )
         { throw LocationNetworkError(ErrorCode::ERROR_BAD_RESPONSE, "Failed to get expected response"); }
     

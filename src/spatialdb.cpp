@@ -46,7 +46,8 @@ const vector<string> DatabaseInitCommands = {
     "  serviceType  INT NOT NULL, "
     "  port         INT NOT NULL, "
     "  data         BLOB, "
-    "  PRIMARY KEY(nodeId, serviceType)"
+    "  PRIMARY KEY(nodeId, serviceType), "
+    "  FOREIGN KEY(nodeId) REFERENCES nodes(id) "
     ");"
     
 "END TRANSACTION;" };
@@ -80,8 +81,15 @@ void ThreadSafeChangeListenerRegistry::AddListener(shared_ptr<IChangeListener> l
     lock_guard<mutex> lock(_mutex);
     if (listener == nullptr)
         { throw LocationNetworkError(ErrorCode::ERROR_INTERNAL, "Attempt to register listener instance null"); }
-        
+    
+    if ( _listeners.find( listener->sessionId() ) != _listeners.end() )
+    {
+        LOG(DEBUG) << "Session already have a registered listener, ignore request to add new one";
+        return;
+    }
+    
     _listeners[ listener->sessionId() ] = listener;
+    listener->OnRegistered();
     LOG(DEBUG) << "Registered ChangeListener for session " << listener->sessionId();
 }
 
@@ -247,8 +255,13 @@ SpatiaLiteDatabase::SpatiaLiteDatabase( const NodeInfo& myNodeInfo, const string
     }
     scope_error closeDbOnError( [this] { sqlite3_close(_dbHandle); } );
     
+#ifndef _WIN32
     spatialite_init_ex(_dbHandle, _spatialiteConnection, 0);
     scope_error cleanupOnError( [this] { spatialite_cleanup_ex(_spatialiteConnection); } );
+#else
+    sqlite3_enable_load_extension(_dbHandle, 1);
+    sqlite3_load_extension(_dbHandle, "mod_spatialite", nullptr, nullptr);
+#endif
 
     LOG(TRACE) << "SQLite version: " << sqlite3_libversion();
     LOG(TRACE) << "SpatiaLite version: " << spatialite_version();
@@ -267,7 +280,7 @@ SpatiaLiteDatabase::SpatiaLiteDatabase( const NodeInfo& myNodeInfo, const string
     if ( selfEntries.size() > 1 )
         { throw LocationNetworkError(ErrorCode::ERROR_INTERNAL, "Multiple self instances found, database may have been tampered with."); }
     if ( ! selfEntries.empty() && selfEntries.front().id() != _myNodeInfo.id() )
-        { throw LocationNetworkError(ErrorCode::ERROR_INVALID_STATE, "Node id changed, database is invalidated. Delete database file " +
+        { throw LocationNetworkError(ErrorCode::ERROR_BAD_STATE, "Node id changed, database is invalidated. Delete database file " +
             dbPath + " to force signing up to the network with the new node id."); }
     
     if ( selfEntries.empty() )  { Store ( ThisNodeToDbEntry(_myNodeInfo), false ); }
@@ -279,7 +292,9 @@ SpatiaLiteDatabase::SpatiaLiteDatabase( const NodeInfo& myNodeInfo, const string
 SpatiaLiteDatabase::~SpatiaLiteDatabase()
 {
     sqlite3_close (_dbHandle);
+#ifndef _WIN32
     spatialite_cleanup_ex(_spatialiteConnection);
+#endif
     // TODO there is no free cache function in current version despite description
     // spatialite_free_internal_cache();
     // TODO is this needed?
@@ -626,9 +641,11 @@ void SpatiaLiteDatabase::Remove(const NodeId &nodeId)
 {
     shared_ptr<NodeDbEntry> storedNode = Load(nodeId);
     if (storedNode == nullptr)
-        { throw LocationNetworkError(ErrorCode::ERROR_INVALID_DATA, "Node to be removed is not present: " + nodeId); }
+        { throw LocationNetworkError(ErrorCode::ERROR_INVALID_VALUE, "Node to be removed is not present: " + nodeId); }
     if ( storedNode->relationType() == NodeRelationType::Self )
-        { throw LocationNetworkError(ErrorCode::ERROR_INVALID_DATA, "Attempt to delete self entry"); }
+        { throw LocationNetworkError(ErrorCode::ERROR_INVALID_VALUE, "Attempt to delete self entry"); }
+    
+    RemoveServices(nodeId);
     
     sqlite3_stmt *statement;
     string insertStr(
@@ -662,8 +679,6 @@ void SpatiaLiteDatabase::Remove(const NodeId &nodeId)
         LOG(ERROR) << "Affected row count for delete should be 1, got : " << affectedRows;
         throw LocationNetworkError(ErrorCode::ERROR_INTERNAL, "Wrong affected row count for delete");
     }
-    
-    RemoveServices(nodeId);
     
     for ( auto listenerEntry : _listenerRegistry.listeners() )
     {

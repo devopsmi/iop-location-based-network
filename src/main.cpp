@@ -1,10 +1,10 @@
 #include <iostream>
 #include <csignal>
 
-#include <easylogging++.h>
-
 #include "config.hpp"
 #include "network.hpp"
+
+#include <easylogging++.h>
 
 INITIALIZE_EASYLOGGINGPP
 
@@ -79,9 +79,7 @@ int main(int argc, const char *argv[])
         mySignalHandlerFunc = [&ShutdownRequested, &localTcpServer, &nodeTcpServer, &clientTcpServer] (int)
         {
             ShutdownRequested = true;
-            localTcpServer.Shutdown();
-            nodeTcpServer.Shutdown();
-            clientTcpServer.Shutdown();
+            IoService::Instance().Shutdown();
         };
         
         signal(SIGINT,  signalHandler);
@@ -99,7 +97,7 @@ int main(int argc, const char *argv[])
                     node->ExpireOldNodes();
                 }
                 catch (exception &ex)
-                    { LOG(ERROR) << "Maintenance thread failed: " << ex.what(); }
+                    { LOG(ERROR) << "Maintenance failed: " << ex.what(); }
             }
         } );
         dbMaintenanceThread.detach();
@@ -114,16 +112,28 @@ int main(int argc, const char *argv[])
                     node->DiscoverUnknownAreas();
                 }
                 catch (exception &ex)
-                    { LOG(ERROR) << "Periodic discovery thread failed: " << ex.what(); }
+                    { LOG(ERROR) << "Periodic discovery failed: " << ex.what(); }
             }
         } );
         discoveryThread.detach();
+
+//         thread longBlockingOperationsThread( [&ShutdownRequested]
+//         {
+//             while (! ShutdownRequested)
+//             {
+//                 try { Network::Instance().ClientReactor().run(); }
+//                 catch (exception &ex)
+//                     { LOG(ERROR) << "Async notification operation failed: " << ex.what(); }
+//             }
+//         } );
+//         longBlockingOperationsThread.detach();
         
-        // TODO we should do something more useful here instead of polling,
-        //      maybe run io_service::run, does it block CTRL-C and other signals?
-        // Avoid exiting from this thread
         while (! ShutdownRequested)
-            { this_thread::sleep_for( chrono::milliseconds(50) ); }
+        {
+            try { IoService::Instance().Server().run_one(); }
+            catch (exception &ex)
+                    { LOG(ERROR) << "Async operation failed: " << ex.what(); }
+        }
         
         LOG(INFO) << "Shutting down location-based network";
         return 0;

@@ -1,5 +1,14 @@
 #include <cstdlib>
 
+#ifdef _WIN32
+  #include <windows.h>
+  #include <shlobj.h>
+#else
+  #include <unistd.h>
+  #include <sys/types.h>
+  #include <pwd.h>
+#endif
+
 #include <easylogging++.h>
 #include <ezOptionParser.hpp>
 
@@ -13,12 +22,13 @@ namespace LocNet
 {
 
 
-static const uint16_t VERSION_MAJOR = 0;
-static const uint16_t VERSION_MINOR = 1;
-static const uint16_t VERSION_PATCH = 1;
+static const uint16_t VERSION_MAJOR = 1;
+static const uint16_t VERSION_MINOR = 0;
+static const uint16_t VERSION_PATCH = 0;
+static const string   RELEASE_STATE = "alpha";
 
 static const string LOCNET_VERSION = to_string(VERSION_MAJOR) + "." +
-    to_string(VERSION_MINOR) + "." + to_string(VERSION_PATCH);
+    to_string(VERSION_MINOR) + "." + to_string(VERSION_PATCH) + "-" + RELEASE_STATE;
 
 static const size_t NEIGHBOURHOOD_TARGET_SIZE = 50;
 
@@ -64,6 +74,7 @@ void Config::InitForTest()
 }
 
 
+Config::Config() {}
 
 const string& Config::version() const
     { return LOCNET_VERSION; }
@@ -72,15 +83,11 @@ bool Config::isTestMode() const
     { return _testMode; }
 
 size_t Config::neighbourhoodTargetSize() const
-    { return isTestMode() ? 2 : NEIGHBOURHOOD_TARGET_SIZE; }
+    { return isTestMode() ? 3 : NEIGHBOURHOOD_TARGET_SIZE; }
 
 
 
-#ifdef WIN32
-
-#include <windows.h>
-#include <shlobj.h>
-#define MAX_PATH 1024
+#ifdef _WIN32
 
 string GetWindowsDirectory(int folderId = CSIDL_APPDATA, bool createDir = true)
 {
@@ -92,10 +99,6 @@ string GetWindowsDirectory(int folderId = CSIDL_APPDATA, bool createDir = true)
 }
 
 #else
-
-#include <unistd.h>
-#include <sys/types.h>
-#include <pwd.h>
 
 string GetPosixHomeDirectory()
 {
@@ -116,7 +119,7 @@ static const string APPLICATION_DIRECTORY_RELATIVE_NAME = "iop-locnet";
 // Unix: ~/.iop-locnet
 string GetApplicationDataDirectory()
 {
-#ifdef WIN32
+#ifdef _WIN32
     string result = GetWindowsDirectory() + "\\" + APPLICATION_DIRECTORY_RELATIVE_NAME + "\\";
     if ( ! CreateDirectory( result.c_str(), nullptr ) && ERROR_ALREADY_EXISTS != GetLastError() )
         { throw LocationNetworkError(ErrorCode::ERROR_INTERNAL, "Failed to create directory " + result); }
@@ -321,13 +324,13 @@ TcpPort EzParserConfig::localServicePort() const
     { return _localPort; }
     
 chrono::duration<uint32_t> EzParserConfig::dbMaintenancePeriod() const
-    { return isTestMode() ? chrono::duration<uint32_t>(chrono::seconds(30)) : _dbMaintenancePeriod; }
+    { return isTestMode() ? chrono::duration<uint32_t>(chrono::seconds(35)) : _dbMaintenancePeriod; }
 
 chrono::duration<uint32_t> EzParserConfig::dbExpirationPeriod() const
     { return isTestMode() ? chrono::duration<uint32_t>(chrono::minutes(2)) : _dbExpirationPeriod; }
 
 chrono::duration<uint32_t> EzParserConfig::discoveryPeriod() const
-    { return isTestMode() ? chrono::duration<uint32_t>(chrono::seconds(10)) : _discoveryPeriod; }
+    { return isTestMode() ? chrono::duration<uint32_t>(chrono::seconds(15)) : _discoveryPeriod; }
 
 
 }

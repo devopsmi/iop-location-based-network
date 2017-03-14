@@ -81,7 +81,8 @@ void Node::RegisterService(const ServiceInfo& serviceInfo)
     NodeDbEntry entry = _spatialDb->ThisNode();
     entry.services()[ serviceInfo.type() ] = serviceInfo;
     _spatialDb->Update(entry);
-    // TODO should we immediately start distributing this change or is it enough to wait for the usual renewal?
+    
+    RenewNeighbours();
 }
 
 void Node::DeregisterService(ServiceType serviceType)
@@ -95,7 +96,8 @@ void Node::DeregisterService(ServiceType serviceType)
     NodeDbEntry entry = _spatialDb->ThisNode();
     entry.services().erase(serviceType);
     _spatialDb->Update(entry);
-    // TODO should we immediately start distributing this change or is it enough to wait for the usual renewal?
+    
+    RenewNeighbours();
 }
 
 
@@ -115,6 +117,10 @@ void Node::DetectedExternalAddress(const Address& address)
         LOG(INFO) << "Detected external IP address " << address;
         myEntry.contact().address(address);
         _spatialDb->Update(myEntry);
+        
+        // TODO normally we should immediately start distributing updated node info,
+        //      but IP may change again during the process and may behave Unexpectedly. What to do here?
+        // RenewNeighbours();
     }
 }
 
@@ -672,7 +678,7 @@ void Node::ExpireOldNodes()
 
 void Node::RenewNodeRelations()
 {
-    vector<NodeDbEntry> nodesToContact = _spatialDb->GetNodes(NodeContactRoleType::Initiator);
+    vector<NodeDbEntry> nodesToContact( _spatialDb->GetNodes(NodeContactRoleType::Initiator) );
     LOG(DEBUG) << "We have " << nodesToContact.size() << " relations to renew";
     for (auto const &node : nodesToContact)
     {
@@ -683,11 +689,34 @@ void Node::RenewNodeRelations()
         }
         catch (exception &e)
         {
-            LOG(WARNING) << "Unexpected error renewing relation for node "
+            LOG(WARNING) << "Unexpected error renewing relation with node "
                          << node.id() << " : " << e.what();
         }
     }
 }
+
+
+void Node::RenewNeighbours()
+{
+    vector<NodeDbEntry> neighbours( _spatialDb->GetNeighbourNodesByDistance() );
+    LOG(DEBUG) << "Updating changed node details on " << neighbours.size() << " neighbours";
+    for (auto const &neighbour : neighbours)
+    {
+        try
+        {
+            // TODO this should not block the response message, should just post tasks to the io_service to be executed later.
+            bool updated = SafeStoreNode( NodeDbEntry(neighbour,
+                NodeRelationType::Neighbour, NodeContactRoleType::Initiator) );
+            LOG(DEBUG) << "Attempted updating changed self info on neighbour " << neighbour.id() << ", result: " << updated;
+        }
+        catch (exception &e)
+        {
+            LOG(WARNING) << "Unexpected error updating changed self info on neighbour "
+                         << neighbour.id() << " : " << e.what();
+        }
+    }
+}
+
 
 
 void Node::DiscoverUnknownAreas()
@@ -703,12 +732,6 @@ void Node::DiscoverUnknownAreas()
             
         try
         {
-            // TODO consider: the resulted node might be very far away from the generated random node,
-            //      so prefiltering might cause bad results, but it also spares network costs. Test and decide!
-            //      If this is not commented, we should separately take care about discovering new neighbours.
-            // if ( BubbleOverlaps(randomLocation) )
-            //    { continue; }
-            
             NodeInfo myNodeInfo = _spatialDb->ThisNode();
             
             // Get node closest to this position that is already present in our database
@@ -735,6 +758,9 @@ void Node::DiscoverUnknownAreas()
                 { continue; }
             const auto &newClosestNode = newClosestNodes[0];
             LOG(DEBUG) << "Closest node to random position is " << newClosestNode;
+            
+// TODO probably we should also ask a random seed node here and get the closest of the two results
+//      if both available. This might help rejoining a splitted network.
             
             // If we already know this node, nothing to do here, renewals will keep it alive
             shared_ptr<NodeInfo> storedInfo = _spatialDb->Load( newClosestNode.id() );

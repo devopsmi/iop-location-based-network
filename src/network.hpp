@@ -6,7 +6,7 @@
 #include <thread>
 
 #define ASIO_STANDALONE
-#include <asio.hpp>
+#include "asio.hpp"
 
 #include "messaging.hpp"
 
@@ -16,31 +16,14 @@ namespace LocNet
 {
 
 
-// class ProActor
-// {
-//     static std::shared_ptr<ProActor> _instance;
-//     
-// protected:
-//     
-//     ProActor();
-//     ProActor(const IoService &other) = delete;
-//     ProActor& operator=(const IoService &other) = delete;
-//     
-// public:
-//     
-//     static ProActor& Instance();
-//     
-//     virtual void Shutdown() = 0;
-// };
 
-
-
-// TODO separate strands for fast server, slow client and maybe some other async operations.
 class IoService
 {
     static IoService _instance;
     
-    asio::io_service _serverIoService;
+    asio::io_service         _asioService;
+    asio::io_service::strand _fastStrand;
+    asio::io_service::strand _slowStrand;
     
 protected:
     
@@ -54,7 +37,9 @@ public:
 
     void Shutdown();
     
-    asio::io_service& Server();
+    asio::io_service& AsioService();
+    asio::io_service::strand& FastStrand();
+    asio::io_service::strand& SlowStrand();
 };
 
 
@@ -109,7 +94,7 @@ class ProtoBufNetworkSession
     std::shared_ptr<INetworkConnection> _connection;
     
     uint32_t _nextMessageId;
-    std::unordered_map<uint32_t, std::promise<iop::locnet::Response>> _pendingRequests;
+    std::unordered_map< uint32_t, std::promise< std::unique_ptr<iop::locnet::Response> > > _pendingRequests;
     std::mutex _pendingRequestsMutex;
     
 public:
@@ -119,9 +104,9 @@ public:
     
     virtual const SessionId& id() const;
     
-    virtual std::future<iop::locnet::Response> SendRequest(
+    virtual std::future< std::unique_ptr<iop::locnet::Response> > SendRequest(
         std::unique_ptr<iop::locnet::Message> &&requestMessage);
-    virtual void ResponseArrived(const iop::locnet::Message &responseMessage);
+    virtual void ResponseArrived( std::unique_ptr<iop::locnet::Message> &&responseMessage);
 };
 
 

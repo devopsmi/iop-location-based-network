@@ -41,8 +41,9 @@ int main(int argc, const char* const argv[])
         
         const NetworkEndpoint nodeContact(host, port);
         LOG(INFO) << "Connecting to server " << nodeContact;
-        shared_ptr<IProtoBufNetworkSession> session( new ProtoBufTcpStreamSession(nodeContact) );
-        shared_ptr<IProtoBufRequestDispatcher> dispatcher( new ProtoBufRequestNetworkDispatcher(session) );
+        shared_ptr<INetworkConnection> connection( new SyncTcpNetworkConnection(nodeContact) );
+        shared_ptr<ProtoBufNetworkSession> session( new ProtoBufNetworkSession(connection) );
+        shared_ptr<IBlockingRequestDispatcher> dispatcher( new NetworkDispatcher(session) );
 
         LOG(INFO) << "Sending getnodecount request";
         NodeMethodsProtoBufClient client(dispatcher, nullptr);

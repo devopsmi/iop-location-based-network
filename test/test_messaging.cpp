@@ -41,11 +41,11 @@ SCENARIO("ProtoBuf messaging", "[messaging]")
         IncomingRequestDispatcher dispatcher(node, listenerFactory);
         
         THEN("Local service GetNeighbours requests are properly served") {
-            iop::locnet::Request request;
-            request.set_version({1,0,0});
-            request.mutable_localservice()->mutable_getneighbournodes();
+            unique_ptr<iop::locnet::Request> request( new iop::locnet::Request() );
+            request->set_version({1,0,0});
+            request->mutable_localservice()->mutable_getneighbournodes();
                 
-            shared_ptr<iop::locnet::Response> response = dispatcher.Dispatch(request);
+            unique_ptr<iop::locnet::Response> response = dispatcher.Dispatch( move(request) );
             REQUIRE( response->has_localservice() );
             REQUIRE( response->localservice().has_getneighbournodes() );
             

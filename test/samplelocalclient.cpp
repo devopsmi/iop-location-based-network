@@ -41,27 +41,28 @@ int main(int argc, const char* const argv[])
         
         const NetworkEndpoint nodeContact(host, port);
         LOG(INFO) << "Connecting to server " << nodeContact;
-        shared_ptr<IProtoBufNetworkSession> session( new ProtoBufTcpStreamSession(nodeContact) );
-        shared_ptr<IProtoBufRequestDispatcher> dispatcher( new ProtoBufRequestNetworkDispatcher(session) );
+        shared_ptr<INetworkConnection> connection( new SyncTcpNetworkConnection(nodeContact) );
+        shared_ptr<ProtoBufNetworkSession> session( new ProtoBufNetworkSession(connection) );
+        shared_ptr<IBlockingRequestDispatcher> dispatcher( new NetworkDispatcher(session) );
  
         // Test listening for neighbourhood notifications
-        thread msgThread( [session, dispatcher]
+        thread msgThread( [connection, session, dispatcher]
         {
             try
             {
                 LOG(INFO) << "Sending registerservice request";
-                shared_ptr<iop::locnet::Request> registerRequest( new iop::locnet::Request() );
+                unique_ptr<iop::locnet::Request> registerRequest( new iop::locnet::Request() );
                 registerRequest->mutable_localservice()->mutable_registerservice()->set_allocated_service(
                     Converter::ToProtoBuf( ServiceInfo(ServiceType::Profile, 16999, "ProfileServerId") ) );
-                unique_ptr<iop::locnet::Response> registerResponse = dispatcher->Dispatch(*registerRequest);
+                unique_ptr<iop::locnet::Response> registerResponse = dispatcher->Dispatch( move(registerRequest) );
                 
                 uint32_t requestsSent = 0;
                 while (! ShutdownRequested && requestsSent < 3)
                 {
                     LOG(INFO) << "Sending getneighbournodes request";
-                    shared_ptr<iop::locnet::Request> neighbourhoodRequest( new iop::locnet::Request() );
+                    unique_ptr<iop::locnet::Request> neighbourhoodRequest( new iop::locnet::Request() );
                     neighbourhoodRequest->mutable_localservice()->mutable_getneighbournodes()->set_keepaliveandsendupdates(true);
-                    unique_ptr<iop::locnet::Response> neighbourhoodResponse = dispatcher->Dispatch(*neighbourhoodRequest);
+                    unique_ptr<iop::locnet::Response> neighbourhoodResponse = dispatcher->Dispatch( move(neighbourhoodRequest) );
                     if ( ! neighbourhoodResponse->has_localservice() ||
                          ! neighbourhoodResponse->localservice().has_getneighbournodes() )
                     {
@@ -76,15 +77,15 @@ int main(int argc, const char* const argv[])
                 while (! ShutdownRequested && notificationsReceived < 2)
                 {
                     LOG(INFO) << "Reading change notification";
-                    unique_ptr<iop::locnet::MessageWithHeader> changeNote( session->ReceiveMessage() );
+                    unique_ptr<iop::locnet::Message> changeNote( connection->ReceiveMessage() );
                     if (! changeNote)
                     {
                         LOG(ERROR) << "Received empty message";
                         break;
                     }
-                    if ( ! changeNote->has_body() || ! changeNote->body().has_request() ||
-                         ! changeNote->body().request().has_localservice() ||
-                         ! changeNote->body().request().localservice().has_neighbourhoodchanged() )
+                    if ( ! changeNote->has_request() ||
+                         ! changeNote->request().has_localservice() ||
+                         ! changeNote->request().localservice().has_neighbourhoodchanged() )
                     {
                         LOG(ERROR) << "Received unexpected message";
                         break;
@@ -92,16 +93,16 @@ int main(int argc, const char* const argv[])
                     
                     ++notificationsReceived;
                     LOG(INFO) << "Sending acknowledgement";
-                    iop::locnet::MessageWithHeader changeAckn;
-                    changeAckn.mutable_body()->mutable_response()->mutable_localservice()->mutable_neighbourhoodupdated();
-                    session->SendMessage(changeAckn);
+                    unique_ptr<iop::locnet::Message> changeAckn( new iop::locnet::Message() );
+                    changeAckn->mutable_response()->mutable_localservice()->mutable_neighbourhoodupdated();
+                    connection->SendMessage( move(changeAckn) );
                 }
                 
                 LOG(INFO) << "Sending deregisterservice request";
-                shared_ptr<iop::locnet::Request> deregisterRequest( new iop::locnet::Request() );
+                unique_ptr<iop::locnet::Request> deregisterRequest( new iop::locnet::Request() );
                 deregisterRequest->mutable_localservice()->mutable_deregisterservice()->set_servicetype(
                     Converter::ToProtoBuf(ServiceType::Profile) );
-                unique_ptr<iop::locnet::Response> deregisterResponse = dispatcher->Dispatch(*deregisterRequest);
+                unique_ptr<iop::locnet::Response> deregisterResponse = dispatcher->Dispatch( move(deregisterRequest) );
             }
             catch (exception &ex)
             {

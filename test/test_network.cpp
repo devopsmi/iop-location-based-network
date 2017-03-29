@@ -32,41 +32,39 @@ SCENARIO("TCP networking", "[network]")
         shared_ptr<INodeConnectionFactory> connectionFactory( new DummyNodeConnectionFactory() );
         shared_ptr<Node> node( new Node(geodb, connectionFactory) );
         
-        shared_ptr<IProtoBufRequestDispatcherFactory> dispatcherFactory(
-            new CombinedRequestDispatcherFactory(node) );
-        ProtoBufDispatchingTcpServer tcpServer( BudapestNodeContact.nodePort(), dispatcherFactory );
+        shared_ptr<IBlockingRequestDispatcherFactory> dispatcherFactory(
+            new CombinedBlockingRequestDispatcherFactory(node) );
+        DispatchingTcpServer tcpServer( BudapestNodeContact.nodePort(), dispatcherFactory );
         
         THEN("It serves clients via sync TCP")
         {
             const NodeContact &BudapestNodeContact( TestData::NodeBudapest.contact() );
-            shared_ptr<INetworkConnection> connection( new SyncTcpStreamNetworkConnection(
+            shared_ptr<INetworkConnection> clientConnection( new SyncTcpNetworkConnection(
                 BudapestNodeContact.nodeEndpoint() ) );
-            shared_ptr<ProtoBufNetworkSession> clientSession( new ProtoBufNetworkSession(connection) );
-            
             {
-                iop::locnet::Message requestMsg;
-                requestMsg.mutable_request()->mutable_localservice()->mutable_getneighbournodes();
-                requestMsg.mutable_request()->set_version({1,0,0});
-                clientSession->SendMessage(requestMsg);
+                unique_ptr<iop::locnet::Message> requestMsg( new iop::locnet::Message() );
+                requestMsg->mutable_request()->mutable_localservice()->mutable_getneighbournodes();
+                requestMsg->mutable_request()->set_version({1,0,0});
+                clientConnection->SendMessage( move(requestMsg) );
                 
-                unique_ptr<iop::locnet::MessageWithHeader> msgReceived( clientSession->ReceiveMessage() );
+                unique_ptr<iop::locnet::Message> msgReceived( clientConnection->ReceiveMessage() );
                 
                 const iop::locnet::GetNeighbourNodesByDistanceResponse &response =
-                    msgReceived->body().response().localservice().getneighbournodes();
+                    msgReceived->response().localservice().getneighbournodes();
                 REQUIRE( response.nodes_size() == 2 );
                 REQUIRE( Converter::FromProtoBuf( response.nodes(0) ) == TestData::NodeKecskemet );
                 REQUIRE( Converter::FromProtoBuf( response.nodes(1) ) == TestData::NodeWien );
             }
             {
-                iop::locnet::MessageWithHeader requestMsg;
-                requestMsg.mutable_body()->mutable_request()->mutable_remotenode()->mutable_getnodecount();
-                requestMsg.mutable_body()->mutable_request()->set_version({1,0,0});
-                clientSession->SendMessage(requestMsg);
+                unique_ptr<iop::locnet::Message> requestMsg( new iop::locnet::Message() );
+                requestMsg->mutable_request()->mutable_remotenode()->mutable_getnodecount();
+                requestMsg->mutable_request()->set_version({1,0,0});
+                clientConnection->SendMessage( move(requestMsg) );
                 
-                unique_ptr<iop::locnet::MessageWithHeader> msgReceived( clientSession->ReceiveMessage() );
+                unique_ptr<iop::locnet::Message> msgReceived( clientConnection->ReceiveMessage() );
                 
                 const iop::locnet::GetNodeCountResponse &response =
-                    msgReceived->body().response().remotenode().getnodecount();
+                    msgReceived->response().remotenode().getnodecount();
                 REQUIRE( response.nodecount() == 6 );
             }
         }
@@ -74,11 +72,13 @@ SCENARIO("TCP networking", "[network]")
         THEN("It serves transparent clients using ProtoBuf/TCP protocol")
         {
             const NodeContact &BudapestNodeContact( TestData::NodeBudapest.contact() );
-            shared_ptr<IProtoBufNetworkSession> clientSession(
-                new ProtoBufTcpStreamSession( BudapestNodeContact.nodeEndpoint() ) );
+            shared_ptr<INetworkConnection> clientConnection( new SyncTcpNetworkConnection(
+                BudapestNodeContact.nodeEndpoint() ) );
+            shared_ptr<ProtoBufNetworkSession> clientSession(
+                new ProtoBufNetworkSession(clientConnection) );
             
-            shared_ptr<IProtoBufRequestDispatcher> netDispatcher(
-                new ProtoBufRequestNetworkDispatcher(clientSession) );
+            shared_ptr<IBlockingRequestDispatcher> netDispatcher(
+                new NetworkDispatcher(clientSession) );
             NodeMethodsProtoBufClient client(netDispatcher, {});
             
             size_t nodeCount = client.GetNodeCount();

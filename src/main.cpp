@@ -46,15 +46,15 @@ int main(int argc, const char *argv[])
         shared_ptr<ISpatialDatabase> geodb( new SpatiaLiteDatabase(
             myNodeInfo, config.dbPath(), config.dbExpirationPeriod() ) );
 
-        TcpStreamNodeConnectionFactory *connFactPtr = new TcpStreamNodeConnectionFactory();
+        TcpNodeConnectionFactory *connFactPtr = new TcpNodeConnectionFactory();
         shared_ptr<INodeConnectionFactory> connectionFactory(connFactPtr);
         shared_ptr<Node> node( new Node(geodb, connectionFactory) );
 
         LOG(INFO) << "Connecting node to the network";
-        shared_ptr<IProtoBufRequestDispatcherFactory> nodeDispatcherFactory(
-            new StaticDispatcherFactory( shared_ptr<IProtoBufRequestDispatcher>(
+        shared_ptr<IBlockingRequestDispatcherFactory> nodeDispatcherFactory(
+            new StaticBlockingDispatcherFactory( shared_ptr<IBlockingRequestDispatcher>(
                 new IncomingNodeRequestDispatcher(node) ) ) );
-        ProtoBufDispatchingTcpServer nodeTcpServer(
+        DispatchingTcpServer nodeTcpServer(
             myNodeInfo.contact().nodePort(), nodeDispatcherFactory );
         
         connFactPtr->detectedIpCallback( [node](const Address &addr)
@@ -62,15 +62,15 @@ int main(int argc, const char *argv[])
         node->EnsureMapFilled();
 
         LOG(INFO) << "Serving local and client interfaces";
-        shared_ptr<IProtoBufRequestDispatcherFactory> localDispatcherFactory(
+        shared_ptr<IBlockingRequestDispatcherFactory> localDispatcherFactory(
             new LocalServiceRequestDispatcherFactory(node) );
-        shared_ptr<IProtoBufRequestDispatcherFactory> clientDispatcherFactory(
-            new StaticDispatcherFactory( shared_ptr<IProtoBufRequestDispatcher>(
+        shared_ptr<IBlockingRequestDispatcherFactory> clientDispatcherFactory(
+            new StaticBlockingDispatcherFactory( shared_ptr<IBlockingRequestDispatcher>(
                 new IncomingClientRequestDispatcher(node) ) ) );
         
-        ProtoBufDispatchingTcpServer localTcpServer(
+        DispatchingTcpServer localTcpServer(
             config.localServicePort(), localDispatcherFactory );
-        ProtoBufDispatchingTcpServer clientTcpServer(
+        DispatchingTcpServer clientTcpServer(
             myNodeInfo.contact().clientPort(), clientDispatcherFactory );
 
         // Set up signal handlers to stop on Ctrl-C and further events
@@ -130,7 +130,7 @@ int main(int argc, const char *argv[])
         
         while (! ShutdownRequested)
         {
-            try { IoService::Instance().Server().run_one(); }
+            try { IoService::Instance().AsioService().run_one(); }
             catch (exception &ex)
                     { LOG(ERROR) << "Async operation failed: " << ex.what(); }
         }

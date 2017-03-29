@@ -80,17 +80,15 @@ int main()
         
         const NodeContact &BudapestNodeContact( TestData::NodeBudapest.contact() );
         
-        shared_ptr<IProtoBufRequestDispatcherFactory> nodeDispatcherFactory(
-            new StaticDispatcherFactory( shared_ptr<IProtoBufRequestDispatcher>(
+        shared_ptr<IBlockingRequestDispatcherFactory> nodeDispatcherFactory(
+            new StaticBlockingDispatcherFactory( shared_ptr<IBlockingRequestDispatcher>(
                 new IncomingNodeRequestDispatcher(node) ) ) );
-        shared_ptr<IProtoBufRequestDispatcherFactory> clientDispatcherFactory(
-            new StaticDispatcherFactory( shared_ptr<IProtoBufRequestDispatcher>(
+        shared_ptr<IBlockingRequestDispatcherFactory> clientDispatcherFactory(
+            new StaticBlockingDispatcherFactory( shared_ptr<IBlockingRequestDispatcher>(
                 new IncomingClientRequestDispatcher(node) ) ) );
         
-        ProtoBufDispatchingTcpServer nodeTcpServer(
-            BudapestNodeContact.nodePort(), nodeDispatcherFactory );
-        ProtoBufDispatchingTcpServer clientTcpServer(
-            BudapestNodeContact.clientPort(), clientDispatcherFactory );
+        DispatchingTcpServer nodeTcpServer( BudapestNodeContact.nodePort(), nodeDispatcherFactory );
+        DispatchingTcpServer clientTcpServer( BudapestNodeContact.clientPort(), clientDispatcherFactory );
         
         bool ShutdownRequested = false;
 
@@ -104,7 +102,7 @@ int main()
         std::signal(SIGTERM, signalHandler);
         
         while (! ShutdownRequested)
-            { IoService::Instance().Server().run_one(); }
+            { IoService::Instance().AsioService().run_one(); }
         
         LOG(INFO) << "Finished successfully";
         return 0;
